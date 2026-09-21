@@ -418,3 +418,66 @@ WHERE table2.col2 < ALL (SELECT REGEXP_LIKE(NULL, s1.col1)
                         );
 
 DROP TABLE t;
+
+--echo #
+--echo # Bug#121018: Preserve EXISTS with LIMIT during derived-table conversion
+--echo #
+
+SET @save_optimizer_switch=@@optimizer_switch;
+
+CREATE TABLE t1 (id INT PRIMARY KEY, c0 INT);
+CREATE TABLE t2 (c0 INT);
+INSERT INTO t1 VALUES (1,10),(2,20),(3,30),(4,NULL);
+INSERT INTO t2 VALUES (10),(10),(20),(20),(30),(NULL),(NULL);
+
+# Duplicate matches distinguish a positive OFFSET from an empty result.
+# Keep EXISTS in the SELECT list to exercise subquery_to_derived.
+let $query=
+SELECT c0,
+  EXISTS(SELECT 1 FROM t2 WHERE t2.c0=t1.c0 LIMIT 1) AS ex,
+  NOT EXISTS(SELECT 1 FROM t2 WHERE t2.c0=t1.c0 LIMIT 1) AS nex,
+  NOT EXISTS(SELECT 1 FROM t2 WHERE t2.c0=t1.c0 LIMIT 0) AS limit0,
+  NOT EXISTS(SELECT 1 FROM t2 WHERE t2.c0=t1.c0 LIMIT 1 OFFSET 0) AS offset0,
+  NOT EXISTS(SELECT 1 FROM t2 WHERE t2.c0=t1.c0 LIMIT 1 OFFSET 1) AS offset1,
+  NOT EXISTS(SELECT 1 FROM t2 WHERE t2.c0=t1.c0 LIMIT 1 OFFSET 2) AS offset2
+FROM t1 ORDER BY id;
+
+SET optimizer_switch='subquery_to_derived=off';
+eval $query;
+SET optimizer_switch='subquery_to_derived=on';
+eval $query;
+
+# Rebind both parameters on one prepared statement, then repeat with the
+# transformation disabled. Return to the first binding to check reuse.
+let $switch=2;
+while ($switch)
+{
+  if ($switch == 2)
+  {
+    SET optimizer_switch='subquery_to_derived=on';
+  }
+  if ($switch == 1)
+  {
+    SET optimizer_switch='subquery_to_derived=off';
+  }
+  PREPARE stmt FROM 'SELECT c0,
+    NOT EXISTS(SELECT 1 FROM t2 WHERE t2.c0=t1.c0 LIMIT ? OFFSET ?) AS nex
+    FROM t1 ORDER BY id';
+  SET @lim=1, @off=0;
+  EXECUTE stmt USING @lim, @off;
+  SET @lim=0, @off=0;
+  EXECUTE stmt USING @lim, @off;
+  SET @lim=1, @off=1;
+  EXECUTE stmt USING @lim, @off;
+  SET @lim=1, @off=2;
+  EXECUTE stmt USING @lim, @off;
+  SET @lim=2, @off=1;
+  EXECUTE stmt USING @lim, @off;
+  SET @lim=1, @off=0;
+  EXECUTE stmt USING @lim, @off;
+  DEALLOCATE PREPARE stmt;
+  dec $switch;
+}
+
+DROP TABLE t1, t2;
+SET optimizer_switch=@save_optimizer_switch;
