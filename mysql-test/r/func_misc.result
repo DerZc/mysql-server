@@ -1285,3 +1285,12 @@ c0	my_id
 Warnings:
 Warning	1292	Truncated incorrect DOUBLE value: '3544-04-19'
 DROP TABLE t;
+#
+# Bug #121269: IN comparison with a decimal scalar subquery
+#
+CREATE TABLE t0 (c1 DECIMAL);
+INSERT INTO t0(c1) VALUES (1);
+SELECT 1 IN ('-1',CONCAT(1.0,(SELECT t0.c1 FROM t0))) AS r1 FROM t0;
+r1
+0
+DROP TABLE t0;
