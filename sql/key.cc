@@ -631,7 +631,10 @@ bool key_cmp_if_same(const TABLE *table, const uchar *key, uint idx,
       Multi-valued column's are compared using MEMBER OF operation implemented
       in Field_typed_array::key_cmp() instead of mem compare.
     */
+    // Floating-point signed zeros require numeric comparison.
     if (key_part->bin_cmp && !is_multi_valued_index &&
+        key_part->type != HA_KEYTYPE_FLOAT &&
+        key_part->type != HA_KEYTYPE_DOUBLE &&
         !(key_part->key_part_flag &
           (HA_BLOB_PART | HA_VAR_LENGTH_PART | HA_BIT_PART))) {
       // We can use memcpy.

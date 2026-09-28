@@ -121,6 +121,7 @@ SET(TESTS
   filesort_buffer
   filesort_compare
   filesort_mergechunk
+  heap_hash
   inplace_vector
   integer_digits
   intrusive_list_iterator
@@ -368,7 +369,7 @@ MYSQL_ADD_EXECUTABLE(merge_small_tests-t ${ALL_SMALL_TESTS}
   ENABLE_EXPORTS
   EXCLUDE_FROM_GCOV
   LINK_LIBRARIES sqlgunitlib gunit_small extra::rapidjson extra::boost
-    library_mysys
+    library_mysys heap_library
   )
 IF(TARGET merge_small_tests-t)
   DOWNGRADE_STRINGOP_WARNINGS(merge_small_tests-t)
@@ -399,6 +400,8 @@ FOREACH(test ${TESTS})
     ADD_GCOV_TEST ${test}
   )
 ENDFOREACH()
+
+TARGET_LINK_LIBRARIES(heap_hash-t heap_library)
 
 MYSQL_ADD_EXECUTABLE(mysys_system_info_unsupported-t
   mysys_system_info_unsupported-t.cc
