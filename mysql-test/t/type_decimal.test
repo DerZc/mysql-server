@@ -667,3 +667,90 @@ WHERE NOT ((c0 BETWEEN c0 AND c0) IS TRUE) AND
 ORDER BY c0 IS NULL, c0;
 
 DROP TABLE t2;
+
+--echo #
+--echo # Bug#120994: Store parsed DECIMAL values for ignored truncation
+--echo #
+
+CREATE TABLE t0 (c DECIMAL UNIQUE);
+CREATE TABLE t1 (c TEXT);
+INSERT INTO t0 VALUES (0);
+INSERT INTO t1 VALUES ('0a');
+
+SELECT 1 FROM t1 JOIN t0 ON t1.c = t0.c;
+SELECT 1 FROM t0 JOIN t1 ON t1.c = t0.c;
+SELECT 1 FROM t0 IGNORE INDEX (c) JOIN t1 ON t1.c = t0.c;
+SELECT 1 FROM t1 JOIN t0 ON NOT NOT (t1.c = t0.c);
+SELECT 1 FROM t1 WHERE EXISTS (SELECT 1 FROM t0 WHERE t1.c = t0.c);
+SELECT t1.c = t0.c AS matched FROM t1 CROSS JOIN t0;
+
+PREPARE s FROM 'SELECT 1 FROM t1 JOIN t0 ON t1.c = t0.c';
+EXECUTE s;
+EXECUTE s;
+DEALLOCATE PREPARE s;
+DROP TABLE t0, t1;
+
+--echo #
+--echo # Bug#120581: DECIMAL key lookup with a constant string
+--echo #
+
+CREATE TABLE t0 (c1 DECIMAL(10,0), UNIQUE KEY i0 (c1)) ENGINE=MyISAM;
+INSERT INTO t0 VALUES (8), (NULL);
+
+SELECT c1 FROM t0 WHERE COALESCE(NULL, '8h') IN (c1);
+SELECT c1 FROM t0 FORCE INDEX (i0) WHERE COALESCE(NULL, '8h') IN (c1);
+SELECT c1 FROM t0 IGNORE INDEX (i0) WHERE COALESCE(NULL, '8h') IN (c1);
+SELECT c1 FROM t0 WHERE NOT NOT (COALESCE(NULL, '8h') IN (c1));
+SELECT c1 FROM t0 WHERE EXISTS (SELECT 1 WHERE COALESCE(NULL, '8h') IN (c1));
+SELECT c1, COALESCE(NULL, '8h') IN (c1) AS matched FROM t0 ORDER BY c1;
+
+PREPARE s FROM 'SELECT c1 FROM t0 WHERE COALESCE(NULL, ''8h'') IN (c1)';
+EXECUTE s;
+EXECUTE s;
+DEALLOCATE PREPARE s;
+
+# Reusing a parameterized lookup must not retain the previous key.
+PREPARE s FROM 'SELECT c1 FROM t0 WHERE c1 = ?';
+SET @p = '8h';
+EXECUTE s USING @p;
+SET @p = '0a';
+EXECUTE s USING @p;
+SET @p = '8h';
+EXECUTE s USING @p;
+DEALLOCATE PREPARE s;
+DROP TABLE t0;
+
+--echo #
+--echo # Strict conversion errors and INSERT IGNORE retain their diagnostics.
+--echo #
+
+CREATE TABLE t1 (c DECIMAL(3,1));
+--error ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
+INSERT INTO t1 VALUES ('1.2x');
+--error ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
+INSERT INTO t1 VALUES ('abc');
+--error ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
+INSERT INTO t1 VALUES ('1e100');
+SELECT c FROM t1;
+INSERT IGNORE INTO t1 VALUES ('-1e100'), ('abc'), ('1.2x'), ('1e100');
+SELECT c FROM t1 ORDER BY c;
+DROP TABLE t1;
+
+--echo #
+--echo # Virtual and stored generated columns use the common conversion path.
+--echo #
+
+CREATE TABLE t1 (
+  s VARCHAR(16),
+  v DECIMAL(3,1) AS (s) VIRTUAL,
+  c DECIMAL(3,1) AS (s) STORED
+);
+--error ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
+INSERT INTO t1 (s) VALUES ('1.2x');
+--error ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
+INSERT INTO t1 (s) VALUES ('abc');
+--error ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
+INSERT INTO t1 (s) VALUES ('1e100');
+INSERT IGNORE INTO t1 (s) VALUES ('-1e100'), ('abc'), ('1.2x'), ('1e100');
+SELECT s, v, c FROM t1 ORDER BY s;
+DROP TABLE t1;

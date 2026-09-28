@@ -1084,3 +1084,177 @@ c0 <> IFNULL(-2022419930, c0)
 ORDER BY c0 IS NULL, c0;
 c0
 DROP TABLE t2;
+#
+# Bug#120994: Store parsed DECIMAL values for ignored truncation
+#
+CREATE TABLE t0 (c DECIMAL UNIQUE);
+CREATE TABLE t1 (c TEXT);
+INSERT INTO t0 VALUES (0);
+INSERT INTO t1 VALUES ('0a');
+SELECT 1 FROM t1 JOIN t0 ON t1.c = t0.c;
+1
+1
+Warnings:
+Warning	1366	Incorrect decimal value: '0a' for column 'c' at row 1
+SELECT 1 FROM t0 JOIN t1 ON t1.c = t0.c;
+1
+1
+Warnings:
+Warning	1366	Incorrect decimal value: '0a' for column 'c' at row 1
+SELECT 1 FROM t0 IGNORE INDEX (c) JOIN t1 ON t1.c = t0.c;
+1
+1
+SELECT 1 FROM t1 JOIN t0 ON NOT NOT (t1.c = t0.c);
+1
+1
+Warnings:
+Warning	1366	Incorrect decimal value: '0a' for column 'c' at row 1
+SELECT 1 FROM t1 WHERE EXISTS (SELECT 1 FROM t0 WHERE t1.c = t0.c);
+1
+1
+Warnings:
+Warning	1366	Incorrect decimal value: '0a' for column 'c' at row 1
+SELECT t1.c = t0.c AS matched FROM t1 CROSS JOIN t0;
+matched
+1
+PREPARE s FROM 'SELECT 1 FROM t1 JOIN t0 ON t1.c = t0.c';
+EXECUTE s;
+1
+1
+Warnings:
+Warning	1366	Incorrect decimal value: '0a' for column 'c' at row 1
+EXECUTE s;
+1
+1
+Warnings:
+Warning	1366	Incorrect decimal value: '0a' for column 'c' at row 1
+DEALLOCATE PREPARE s;
+DROP TABLE t0, t1;
+#
+# Bug#120581: DECIMAL key lookup with a constant string
+#
+CREATE TABLE t0 (c1 DECIMAL(10,0), UNIQUE KEY i0 (c1)) ENGINE=MyISAM;
+INSERT INTO t0 VALUES (8), (NULL);
+SELECT c1 FROM t0 WHERE COALESCE(NULL, '8h') IN (c1);
+c1
+8
+Warnings:
+Warning	1366	Incorrect decimal value: '8h' for column 'c1' at row 1
+SELECT c1 FROM t0 FORCE INDEX (i0) WHERE COALESCE(NULL, '8h') IN (c1);
+c1
+8
+Warnings:
+Warning	1366	Incorrect decimal value: '8h' for column 'c1' at row 1
+SELECT c1 FROM t0 IGNORE INDEX (i0) WHERE COALESCE(NULL, '8h') IN (c1);
+c1
+8
+SELECT c1 FROM t0 WHERE NOT NOT (COALESCE(NULL, '8h') IN (c1));
+c1
+8
+Warnings:
+Warning	1366	Incorrect decimal value: '8h' for column 'c1' at row 1
+SELECT c1 FROM t0 WHERE EXISTS (SELECT 1 WHERE COALESCE(NULL, '8h') IN (c1));
+c1
+8
+SELECT c1, COALESCE(NULL, '8h') IN (c1) AS matched FROM t0 ORDER BY c1;
+c1	matched
+NULL	NULL
+8	1
+PREPARE s FROM 'SELECT c1 FROM t0 WHERE COALESCE(NULL, ''8h'') IN (c1)';
+EXECUTE s;
+c1
+8
+Warnings:
+Warning	1366	Incorrect decimal value: '8h' for column 'c1' at row 1
+EXECUTE s;
+c1
+8
+Warnings:
+Warning	1366	Incorrect decimal value: '8h' for column 'c1' at row 1
+DEALLOCATE PREPARE s;
+PREPARE s FROM 'SELECT c1 FROM t0 WHERE c1 = ?';
+SET @p = '8h';
+EXECUTE s USING @p;
+c1
+8
+Warnings:
+Warning	1292	Truncated incorrect DECIMAL value: '8h'
+Warning	1366	Incorrect decimal value: '8h' for column 'c1' at row 1
+Warning	1292	Truncated incorrect DECIMAL value: '8h'
+SET @p = '0a';
+EXECUTE s USING @p;
+c1
+Warnings:
+Warning	1292	Truncated incorrect DECIMAL value: '0a'
+Warning	1366	Incorrect decimal value: '0a' for column 'c1' at row 1
+SET @p = '8h';
+EXECUTE s USING @p;
+c1
+8
+Warnings:
+Warning	1292	Truncated incorrect DECIMAL value: '8h'
+Warning	1366	Incorrect decimal value: '8h' for column 'c1' at row 1
+Warning	1292	Truncated incorrect DECIMAL value: '8h'
+DEALLOCATE PREPARE s;
+DROP TABLE t0;
+#
+# Strict conversion errors and INSERT IGNORE retain their diagnostics.
+#
+CREATE TABLE t1 (c DECIMAL(3,1));
+INSERT INTO t1 VALUES ('1.2x');
+ERROR HY000: Incorrect decimal value: '1.2x' for column 'c' at row 1
+INSERT INTO t1 VALUES ('abc');
+ERROR HY000: Incorrect decimal value: 'abc' for column 'c' at row 1
+INSERT INTO t1 VALUES ('1e100');
+ERROR HY000: Incorrect decimal value: '1e100' for column 'c' at row 1
+SELECT c FROM t1;
+c
+INSERT IGNORE INTO t1 VALUES ('-1e100'), ('abc'), ('1.2x'), ('1e100');
+Warnings:
+Warning	1264	Out of range value for column 'c' at row 1
+Warning	1366	Incorrect decimal value: 'abc' for column 'c' at row 2
+Note	1265	Data truncated for column 'c' at row 3
+Warning	1264	Out of range value for column 'c' at row 4
+SELECT c FROM t1 ORDER BY c;
+c
+-99.9
+0.0
+1.2
+99.9
+DROP TABLE t1;
+#
+# Virtual and stored generated columns use the common conversion path.
+#
+CREATE TABLE t1 (
+s VARCHAR(16),
+v DECIMAL(3,1) AS (s) VIRTUAL,
+c DECIMAL(3,1) AS (s) STORED
+);
+INSERT INTO t1 (s) VALUES ('1.2x');
+ERROR HY000: Incorrect decimal value: '1.2x' for column 'v' at row 1
+INSERT INTO t1 (s) VALUES ('abc');
+ERROR HY000: Incorrect decimal value: 'abc' for column 'v' at row 1
+INSERT INTO t1 (s) VALUES ('1e100');
+ERROR HY000: Incorrect decimal value: '1e100' for column 'v' at row 1
+INSERT IGNORE INTO t1 (s) VALUES ('-1e100'), ('abc'), ('1.2x'), ('1e100');
+Warnings:
+Warning	1264	Out of range value for column 'v' at row 1
+Warning	1264	Out of range value for column 'c' at row 1
+Warning	1366	Incorrect decimal value: 'abc' for column 'v' at row 2
+Warning	1366	Incorrect decimal value: 'abc' for column 'c' at row 2
+Note	1265	Data truncated for column 'v' at row 3
+Note	1265	Data truncated for column 'c' at row 3
+Warning	1264	Out of range value for column 'v' at row 4
+Warning	1264	Out of range value for column 'c' at row 4
+SELECT s, v, c FROM t1 ORDER BY s;
+s	v	c
+-1e100	-99.9	-99.9
+1.2x	1.2	1.2
+1e100	99.9	99.9
+abc	0.0	0.0
+Warnings:
+Warning	1366	Incorrect decimal value: '-1e100' for column 'v' at row 1
+Warning	1366	Incorrect decimal value: 'abc' for column 'v' at row 1
+Warning	1366	Incorrect decimal value: '1.2x' for column 'v' at row 1
+Warning	1366	Incorrect decimal value: '1e100' for column 'v' at row 1
+DROP TABLE t1;
