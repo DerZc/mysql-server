@@ -2609,6 +2609,39 @@ check_reverse_order:
 
   assert(can_skip_sorting);
 
+  // A TempTable table scan cannot use the ordering index: its handler does
+  // not support index_first()/index_last(). A newly constructed range scan
+  // can still provide the order, but only if we actually select it below.
+  if (best_key >= 0 && tab->type() == JT_ALL &&
+      table->s->db_type() == temptable_hton &&
+      (no_changes || tab->range_scan() == nullptr ||
+       tab->range_scan() == save_range_scan)) {
+    can_skip_sorting = false;
+    goto fix_ICP;
+  }
+
+  if (order_direction == -1 && table->s->db_type() == temptable_hton &&
+      tab->range_scan() != nullptr) {
+    const auto &range_scan = tab->range_scan()->index_range_scan();
+    const KEY &key = table->key_info[range_scan.index];
+    // TempTable supports reverse equality ranges covering the entire key.
+    // Other ranges need index_last(), HA_READ_BEFORE_KEY or
+    // HA_READ_PREFIX_LAST_OR_PREV, which TempTable does not support. In
+    // particular, ReverseIndexRangeScanIterator clears EQ_RANGE for a key
+    // prefix. Reject these ranges before changing the access method, so
+    // fix_ICP can restore the saved range and retain filesort.
+    if (used_key_parts > key.user_defined_key_parts ||
+        std::any_of(range_scan.ranges,
+                    range_scan.ranges + range_scan.num_ranges,
+                    [&key](const QUICK_RANGE *range) {
+                      return !(range->flag & EQ_RANGE) ||
+                             range->max_length != key.key_length;
+                    })) {
+      can_skip_sorting = false;
+      goto fix_ICP;
+    }
+  }
+
   /*
     Update query plan with access pattern for doing
     ordered access according to what we have decided
@@ -2689,11 +2722,15 @@ check_reverse_order:
         */
         table->file->ha_index_or_rnd_end();
         tab->position()->filter_effect = COND_FILTER_STALE;
-      } else if (tab->type() != JT_ALL) {
+      } else if (tab->type() != JT_ALL ||
+                 (tab->range_scan() && tab->range_scan() != save_range_scan)) {
         /*
           We're about to use a quick access to the table.
           We need to change the access method so as the quick access
-          method is actually used.
+          method is actually used, including a newly selected ordered range
+          replacing a table scan. Changing QS_DYNAMIC_RANGE to QS_RANGE
+          prevents execution from rebuilding it with ORDER_NOT_RELEVANT and
+          losing the requested ordering.
         */
         assert(tab->range_scan());
         assert(used_index(tab->range_scan()) == (uint)best_key);
